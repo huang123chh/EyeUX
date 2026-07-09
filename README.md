@@ -19,6 +19,25 @@ python server.py
 
 浏览器会自动打开 `http://localhost:8080`。
 
+## ⚙️ AI 报告配置
+
+默认录制+热力图可直接使用。AI 分析报告需要配置 LLM：
+
+1. 复制 `config.example.json` → `config.json`
+2. 填入你的 LLM 信息：
+```json
+{
+  "llm": {
+    "base_url": "https://api.openai.com/v1",
+    "api_key": "sk-your-key-here",
+    "model": "gpt-4o"
+  }
+}
+```
+3. 重启 `python server.py`
+
+支持任何 OpenAI 兼容 API（OpenAI / DeepSeek / Ollama / 自建代理等）。
+
 ## ✨ 功能
 
 - **WebCam 眼动追踪** — 基于 WebGazer.js + MediaPipe Face Mesh，9 点校准

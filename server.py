@@ -56,6 +56,158 @@ PORT = _find_port()
 HTML_PATH = ROOT_DIR / "static" / "index.html"
 HTML = HTML_PATH.read_text(encoding="utf-8")
 
+# ── LLM 客户端（从 config.json 读取）──
+CONFIG_PATH = ROOT_DIR / "config.json"
+_config = {}
+if CONFIG_PATH.exists():
+    try:
+        _config = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+
+_llm_cfg = _config.get("llm", {})
+LLM_ENABLED = bool(_llm_cfg.get("api_key") and _llm_cfg.get("base_url"))
+LLM_CLIENT = None
+LLM_MODEL = ""
+if LLM_ENABLED:
+    from openai import OpenAI
+    LLM_CLIENT = OpenAI(
+        api_key=_llm_cfg["api_key"],
+        base_url=_llm_cfg["base_url"],
+    )
+    LLM_MODEL = _llm_cfg.get("model", "gpt-4o")
+
+
+# ── 注视统计辅助函数 ──
+def compute_gaze_stats(samples, cw, ch):
+    """从注视采样数据计算统计信息"""
+    import numpy as np
+    if not samples:
+        return {}
+
+    xs = [s.get("x", 0) for s in samples]
+    ys = [s.get("y", 0) for s in samples]
+
+    # 网格热点分析
+    grid_cols = 5
+    grid_rows = 5
+    cell_w = cw / grid_cols
+    cell_h = ch / grid_rows
+    grid = {}
+    for s in samples:
+        col = min(int(s.get("x", 0) / cell_w), grid_cols - 1)
+        row = min(int(s.get("y", 0) / cell_h), grid_rows - 1)
+        key = f"{col},{row}"
+        grid[key] = grid.get(key, 0) + 1
+
+    total = len(samples)
+    hotspots = sorted(
+        [{"cell": k, "count": v, "pct": round(v / total * 100, 1)}
+         for k, v in grid.items()],
+        key=lambda x: -x["count"],
+    )[:8]
+
+    # 时间线
+    timestamps = [s.get("ts", 0) for s in samples if s.get("ts")]
+    if timestamps:
+        duration_s = (max(timestamps) - min(timestamps)) / 1000.0
+    else:
+        duration_s = total / 30.0  # 估算
+
+    # 扫描方向分布
+    scan_angles = []
+    for i in range(1, min(len(xs), 500)):
+        dx = xs[i] - xs[i - 1]
+        dy = ys[i] - ys[i - 1]
+        if abs(dx) > 2 or abs(dy) > 2:
+            scan_angles.append(np.degrees(np.arctan2(dy, dx)))
+
+    horizontal_pct = 0
+    if scan_angles:
+        horizontal = sum(1 for a in scan_angles if abs(a) < 30 or abs(a) > 150)
+        horizontal_pct = round(horizontal / len(scan_angles) * 100)
+
+    return {
+        "total_samples": total,
+        "duration_s": round(duration_s, 1),
+        "content_size": f"{cw}x{ch}",
+        "hotspots": hotspots,
+        "horizontal_scan_pct": horizontal_pct,
+        "scan_type": "F型" if horizontal_pct > 50 else "Z型" if horizontal_pct > 35 else "随机探索型",
+    }
+
+
+# ── 报告缓存 ──
+_report_cache = None  # {cache_key, report}
+_last_stats = None
+
+
+def _make_cache_key(samples, file_name, source_text):
+    """用采样数+文件名+源文本长度做简单cache key"""
+    return f"{len(samples)}_{file_name}_{len(source_text)}"
+
+
+# ── LLM 报告生成 ──
+UX_PROMPT = """你是UX可用性测试专家。分析眼动数据，给出简洁报告。
+
+【文件】{file_name}（{file_type}）
+【数据】{total_samples}个采样 / {duration_s}秒
+【热点分布】
+{hotspots_text}
+
+【源文件】
+{source_text}
+
+请严格按以下格式输出（每项2-3句话内）：
+
+🔴 **关键问题**
+- 最重要的发现（1-3条，每条一行）
+
+🟡 **注意力分布**
+- 用户看了哪里、忽略了哪里
+
+🟢 **优化建议**
+- 具体可操作（按优先级排序）
+
+总字数控制在250字以内，不要客套话。"""
+
+
+def call_llm_report(file_name, file_type, source_text, stats):
+    """调用 LLM 生成分析报告"""
+    if not LLM_ENABLED:
+        return {"error": "未配置 LLM。请复制 config.example.json 为 config.json 并填入你的 API 信息。"}
+
+    hotspots_text = "\n".join(
+        f"  • 网格{h['cell']}: {h['count']}次注视 ({h['pct']}%)"
+        for h in stats.get("hotspots", [])
+    )
+
+    prompt = UX_PROMPT.format(
+        file_name=file_name,
+        file_type=file_type,
+        source_text=source_text or "（无文本内容，请仅基于注视坐标分析）",
+        total_samples=stats.get("total_samples", 0),
+        duration_s=stats.get("duration_s", 0),
+        content_size=stats.get("content_size", "未知"),
+        scan_type=stats.get("scan_type", "未知"),
+        horizontal_scan_pct=stats.get("horizontal_scan_pct", 0),
+        hotspots_text=hotspots_text or "无热点数据",
+    )
+
+    try:
+        resp = LLM_CLIENT.chat.completions.create(
+            model=LLM_MODEL,
+            messages=[
+                {"role": "system", "content": "你是UX研究员。用中文回答，简洁、具体、可操作。用Markdown格式，每项2-3句话，总字数不超过250字。不要客套话。"},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.7,
+            max_tokens=2000,
+        )
+        return {"ok": True, "report": resp.choices[0].message.content}
+    except Exception as e:
+        return {"ok": False, "error": f"LLM 调用失败: {e}"}
+
 # ── 会话级文件句柄 ──
 current_session: dict | None = None  # {id, csv_path, csv_file, csv_writer, start_time, count}
 
@@ -392,6 +544,39 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 import traceback
                 traceback.print_exc()
                 self._send_json({"ok": False, "error": str(e)}, 500)
+
+        elif self.path == "/api/report":
+            content_len = int(self.headers.get("Content-Length", 0))
+            body = json.loads(self.rfile.read(content_len))
+            samples = body.get("samples", [])
+            file_name = body.get("fileName", "未知")
+            file_type = body.get("fileType", "未知")
+            source_text = body.get("sourceText", "")
+
+            if not samples:
+                self._send_json({"ok": False, "error": "no samples"}, 400)
+                return
+
+            # 计算注视统计
+            cw = max(s.get("cw", 1920) for s in samples) if samples else 1920
+            ch = max(s.get("ch", 1080) for s in samples) if samples else 1080
+            stats = compute_gaze_stats(samples, cw, ch)
+
+            # 检查缓存
+            global _report_cache, _last_stats
+            cache_key = _make_cache_key(samples, file_name, source_text)
+            if _report_cache and _report_cache.get("key") == cache_key:
+                print(f"[REPORT] Cache hit for {file_name}")
+                result = {"ok": True, "report": _report_cache["report"], "cached": True}
+            else:
+                print(f"[REPORT] Generating for {file_name} ({file_type}), {stats['total_samples']} samples")
+                result = call_llm_report(file_name, file_type, source_text, stats)
+                if result.get("ok"):
+                    _report_cache = {"key": cache_key, "report": result["report"]}
+                _last_stats = stats
+
+            result["stats"] = stats
+            self._send_json(result)
 
         else:
             self.send_response(404)

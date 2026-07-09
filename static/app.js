@@ -57,6 +57,7 @@ const status = document.getElementById('status');
 const btnStart = document.getElementById('btn-start');
 const btnStop = document.getElementById('btn-stop');
 const btnHeatmap = document.getElementById('btn-heatmap');
+const btnReport = document.getElementById('btn-report') || { style: {} };
 const recDot = document.getElementById('rec-dot');
 const sampleCount = document.getElementById('sample-count');
 const fileInput = document.getElementById('file-input');
@@ -246,6 +247,10 @@ let gazeDotVisible = true;
 function toggleGazeDot() {
   gazeDotVisible = !gazeDotVisible;
   gazeDot.style.display = gazeDotVisible ? 'block' : 'none';
+  // 同步隐藏/显示小水珠
+  for (var i = 0; i < particleEls.length; i++) {
+    particleEls[i].style.display = gazeDotVisible ? '' : 'none';
+  }
   var btn = document.getElementById('btn-gazedot');
   if (btn) btn.style.background = gazeDotVisible ? '#555' : '#e67e22';
 }
@@ -363,6 +368,103 @@ function showHeatmap() {
   });
 }
 
+// ── AI 分析报告 ──
+function showReport() {
+  if (!recordedSamples.length) return;
+  btnReport.textContent = '⏳ 生成中...';
+  btnReport.disabled = true;
+
+  // 显示报告弹窗
+  var overlay = document.getElementById('report-overlay');
+  var body = document.getElementById('report-body');
+  overlay.style.display = 'block';
+  body.innerHTML = '<div id="report-loading"><div class="spinner"></div><div>正在生成分析报告...</div></div>';
+
+  fetch('/api/report', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      samples: recordedSamples,
+      fileName: currentFileName || '未命名',
+      fileType: currentFileType || '未知',
+      sourceText: sourceText || ''
+    })
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(data) {
+    btnReport.textContent = '📊 报告';
+    btnReport.disabled = false;
+
+    if (!data.ok) {
+      body.innerHTML = '<div style="color:#e74c3c;text-align:center;padding:60px 20px;">'
+        + '<h3>❌ 报告生成失败</h3><p>' + (data.error || '未知错误') + '</p>'
+        + '<p style="color:#aaa;margin-top:16px;">请复制 config.example.json 为 config.json 并填入你的 API 信息</p></div>';
+      return;
+    }
+
+    if (data.cached) {
+      btnReport.textContent = '📊 已缓存';
+    }
+
+    // 渲染 Markdown 报告
+    var html = renderMarkdown(data.report);
+
+    // 加上统计摘要
+    var stats = data.stats || {};
+    var summary = '<h3>📋 测试概况</h3>'
+      + '<ul>'
+      + '<li>文件：' + escapeHtml(currentFileName || '未命名') + '</li>'
+      + '<li>录制时长：' + (stats.duration_s || '?') + ' 秒</li>'
+      + '<li>注视采样：' + (stats.total_samples || 0) + ' 点</li>'
+      + '<li>扫描模式：' + (stats.scan_type || '?') + '</li>'
+      + '</ul><hr style="border-color:rgba(255,255,255,0.1);margin:20px 0;">';
+
+    body.innerHTML = summary + html;
+  })
+  .catch(function(e) {
+    btnReport.textContent = '📊 报告';
+    btnReport.disabled = false;
+    body.innerHTML = '<div style="color:#e74c3c;text-align:center;padding:60px 20px;">'
+      + '<h3>❌ 网络错误</h3><p>' + e.message + '</p></div>';
+  });
+}
+
+function closeReport() {
+  document.getElementById('report-overlay').style.display = 'none';
+}
+
+// 简单 Markdown 渲染
+function renderMarkdown(md) {
+  if (!md) return '';
+  var t = escapeHtml(md);
+  // 标题
+  t = t.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+  t = t.replace(/^## (.+)$/gm, '<h2 style="color:#fff;font-size:19px;margin:24px 0 8px;">$1</h2>');
+  t = t.replace(/^# (.+)$/gm, '<h2 style="color:#fff;font-size:20px;margin:20px 0 10px;">$1</h2>');
+  // 分割线
+  t = t.replace(/^---$/gm, '<hr style="border-color:rgba(255,255,255,0.1);margin:20px 0;">');
+  // 加粗
+  t = t.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  // 列表
+  t = t.replace(/^  • (.+)$/gm, '<li>$1</li>');
+  t = t.replace(/^• (.+)$/gm, '<li>$1</li>');
+  t = t.replace(/^- (.+)$/gm, '<li>$1</li>');
+  // 将连续的 <li> 包在 <ul> 中
+  t = t.replace(/((?:<li>.*<\/li>\n?)+)/g, '<ul>$1</ul>');
+  // 行内代码
+  t = t.replace(/`([^`]+)`/g, '<code>$1</code>');
+  // 段落（不在标签内的空行）
+  t = '<div>' + t.replace(/\n\n/g, '</div><div>') + '</div>';
+  t = t.replace(/\n/g, '<br>');
+  return t;
+}
+
+function escapeHtml(s) {
+  var d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
 // ── HTML 翻页追踪 ──
 let htmlPage = 0, lastIframeHash = '', hashPollTimer = null;
 
@@ -446,6 +548,8 @@ window.addEventListener('keydown', function(e) {
 
 // ── 文件浏览状态 ──
 let currentFileName = '';
+let currentFileType = '';
+let sourceText = '';
 let pdfDoc = null, pdfPage = 1, pdfTotalPages = 0;
 
 function startRecording() {
@@ -459,6 +563,7 @@ function startRecording() {
       btnStart.style.display = 'none';
       btnStop.style.display = 'inline';
       btnHeatmap.style.display = 'none';
+      btnReport.style.display = 'none';
       recDot.style.display = 'inline';
       sampleCount.textContent = 'samples: 0';
       status.textContent = 'REC ● ' + sessionId.slice(0,8) + (currentFileName ? ' | ' + currentFileName : '');
@@ -485,6 +590,10 @@ function stopRecording() {
         btnHeatmap.textContent = '🔥 Heatmap';
         btnHeatmap.style.background = '#e67e22';
         btnHeatmap.disabled = false;
+        btnReport.style.display = 'inline';
+        btnReport.textContent = '📊 报告';
+        btnReport.style.background = '#3498db';
+        btnReport.disabled = false;
       }
     })
     .catch(e => { console.error(e); });
@@ -512,13 +621,16 @@ fileInput.onchange = function(e) {
   removeHeatmapOverlay();
   if (hashPollTimer) { clearInterval(hashPollTimer); hashPollTimer = null; }
   btnHeatmap.style.display = 'none';
+  btnReport.style.display = 'none';
   htmlPage = 0; updateHtmlPageUI();
+  let ext = file.name.split('.').pop().toLowerCase();
   currentFileName = file.name;
+  currentFileType = ext;
+  sourceText = '';
   pdfDoc = null; pdfPage = 1; pdfTotalPages = 0;
   htmlPage = 0; lastIframeHash = '';
   pdfIndicator.style.display = 'none';
   let url = URL.createObjectURL(file);
-  let ext = file.name.split('.').pop().toLowerCase();
   if (['jpg','jpeg','png','gif','webp','bmp'].includes(ext)) {
     renderImage(url);
   } else if (ext === 'pdf') {
@@ -576,6 +688,7 @@ function renderText(url, ext) {
 }
 
 function renderHTML(htmlText) {
+  sourceText = htmlText;
   let iframe = document.createElement('iframe');
   iframe.className = 'text-iframe';
   iframe.srcdoc = htmlText;
@@ -592,6 +705,7 @@ function renderDocx(url) {
   })
   .then(function(result) {
     let html = result.value;
+    sourceText = html;
     // 注入基础样式，让 Word 内容更接近原版排版
     let styled = '<style>body{font-family:Calibri,sans-serif;font-size:16px;' +
       'line-height:1.6;color:#ddd;padding:40px 60px;max-width:900px;margin:0 auto;' +
@@ -820,7 +934,7 @@ function physicsTick() {
     var ratio = p.life / p.maxLife;
     var sz = PARTICLE_SIZE * (0.25 + ratio * 0.75);
     var op = 0.42 * ratio;
-    particleEls[pi].style.display = '';
+    if (gazeDotVisible) particleEls[pi].style.display = '';
     particleEls[pi].style.left = p.x + 'px';
     particleEls[pi].style.top = p.y + 'px';
     particleEls[pi].style.width = sz + 'px';
