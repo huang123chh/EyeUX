@@ -46,6 +46,7 @@ python server.py
 - **文件热力图** — 支持图片 (JPG/PNG/WebP)、PDF、Word、PPTX、HTML
 - **录制回放** — CSV 格式保存所有注视数据
 - **悬停冲击波** — 鼠标悬停按钮时视觉反馈
+- **AI 分析报告** — 录制后一键生成 UX 分析报告（需配置 LLM）
 
 ## 🛠️ 技术栈
 
@@ -92,8 +93,7 @@ python server.py
 - [x] WebCam 眼动采集 + 9 点校准
 - [x] 基础热力图叠加
 - [x] 多格式文件支持（图片、PDF、Word、PPTX、HTML）
-- [ ] AI 困惑/迷失检测
-- [ ] LLM 自动分析报告
+- [x] LLM 自动分析报告
 - [ ] A/B 页面对比测试
 - [ ] Tobii 高精度模式
 
