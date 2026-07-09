@@ -1,0 +1,30 @@
+# 眼动数据（含测试者隐私）
+data/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.spec
+
+# 虚拟环境
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 系统文件
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 环境变量
+.env
+.env.local
