@@ -74,4 +74,4 @@ python webgazer_server.py
 
 ## 📄 许可证
 
-MIT
+[AGPL v3](LICENSE) — 可免费使用、修改、分发，但通过网络提供服务也视为分发，必须同样以 AGPL v3 开源。闭源商用需单独授权。
